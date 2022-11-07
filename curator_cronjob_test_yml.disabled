@@ -1,0 +1,111 @@
+- name: Get elasticsearch-curator from Internal Repo
+  hosts: Test[1]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+    - name: Add specified repository into sources list
+      ansible.builtin.apt_repository:
+        repo: deb http://10.115.207.207/ubuntu/mirror/packages.elastic.co/curator/5/debian9 stable main
+        state: present
+    - name: Add apt-repository and install elasticsearch-curator
+      shell: apt install -y elasticsearch-curator
+    - name: Create Directory for Curator yaml
+      shell: mkdir -p /opt/curator
+    - name: Change Curator Config File
+      shell:
+         cmd: |
+            cat > /opt/curator/action.yaml << EOF
+            actions:
+              1:
+                action: delete_indices
+                description: >-
+                  . ile baslayanlar haric tum indisleri silen action
+                options:
+                  ignore_empty_list: True
+                  timeout_override:
+                  continue_if_exception: True
+                  disable_action: False
+                filters:
+                  - filtertype: pattern
+                    kind: regex
+                    value: ^[.]
+                    exclude: True
+                  - filtertype: age
+                    source: creation_date
+                    direction: older
+                    #timestring: '%Y.%m.%d'
+                    unit: days
+                    unit_count: 45
+                    exclude:
+              2:
+                action: delete_indices
+                description: >-
+                  .monitoring ile baslayan indisleri silen action
+                options:
+                  ignore_empty_list: True
+                  timeout_override:
+                  continue_if_exception: True
+                  disable_action: False
+                filters:
+                  - filtertype: pattern
+                    kind: prefix
+                    value: .monitoring-
+                    exclude:
+                  - filtertype: age
+                    source: creation_date
+                    direction: older
+                    #timestring: '%Y.%m.%d'
+                    unit: days
+                    unit_count: 45
+                    exclude:
+            EOF
+    - name: Change Curator Config File
+      shell:
+        cmd: |
+          cat > /opt/curator/curator.yaml << EOF
+          client:
+            hosts:
+              - {{ ansible_host }}
+            port: 9200
+            url_prefix:
+            ssl_no_validate: False
+            username: elastic
+            password: qweASD123!!!
+            timeout: 30
+            master_only: False
+          
+          logging:
+            loglevel: INFO
+            logfile:
+            logformat: default
+          
+            blacklist: ['elasticsearch', 'urllib3']
+          EOF
+    - name: Config Cronjob for Curator
+      cron:
+        name: "curator"
+        minute: "08"
+        hour: "10"
+        job: curator --config /opt/curator/curator.yaml /opt/curator/action.yaml > /elasticsearch/curator_logs/curator_logfile_$(date +'%Y-%m-%d').log
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "elasticsearch"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/elasticsearch_logs/ -name "{{ cluster_name }}-*" -type f -mtime +30 -exec rm -rf {} \;
+
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "logstash"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/logstash/logs/ -name "logstash-*.log" -type f -mtime +30 -exec rm -rf {} \;
+
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "Curator_logs"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/curator_logs/ -name "curator_logfile_*" -type f -mtime +30 -exec rm -rf {} \;

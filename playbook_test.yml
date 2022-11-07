@@ -1,0 +1,245 @@
+### Elasticsearch Installation
+# Prepare Elasticsearch Installation
+---
+- name: Installing Elasticsearch to Single Node
+  hosts: Test
+  order: sorted
+  serial: 1
+  become: true
+  become_method: sudo
+  tasks:
+    - name: Installing Elasticsearch in SingleNode
+      shell: apt update && apt install -y elasticsearch
+
+    - name: Create Directory for Data and Log Path
+      shell: mkdir -p /elasticsearch/elasticsearch && mkdir -p /elasticsearch/elasticsearch_logs && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch_logs && chmod -R 775 /elasticsearch/ && chmod -R 775 /elasticsearch/elasticsearch_logs
+
+    - name: Change Elasticsearch Config File
+      shell:
+        cmd: |
+          cat > /etc/elasticsearch/elasticsearch.yml << EOF
+          cluster.name : {{ cluster_name }}
+          node.name : {{ ansible_hostname }}
+
+          path.data: /elasticsearch/elasticsearch
+          path.logs: /elasticsearch/elasticsearch_logs
+          network.host: {{ ansible_host }}
+          http.port: 9200
+          cluster.initial_master_nodes: {{ ansible_host }}
+
+          xpack.security.enabled: true
+          xpack.security.transport.ssl.enabled: true
+          EOF
+
+    - name: Starting Elasticsearch
+      shell: systemctl start elasticsearch.service && systemctl enable elasticsearch.service
+
+    - name: Installing Kibana
+      shell: apt install -y kibana && systemctl start kibana.service && systemctl enable kibana.service
+
+    - name: Create Log and Data Path for Kibana
+      shell: mkdir -p /elasticsearch/kibana_log && chown -R kibana:kibana /elasticsearch/kibana_log && mkdir -p /elasticsearch/kibana && chown -R kibana:kibana /elasticsearch/kibana && chmod -R 775 /elasticsearch/kibana_log && chmod -R 775 /elasticsearch/kibana
+
+    - name: Change Kibana Config File
+      shell:
+        cmd: |
+              cat > /etc/kibana/kibana.yml << EOF
+              server.host: {{ ansible_host }}
+              server.name: {{ ansible_hostname }}
+              elasticsearch.hosts: ["http://{{ ansible_host }}:9200"]
+              kibana.index: ".kibana"
+              elasticsearch.username: "kibana_system"
+              elasticsearch.password: "qweASD123!!!"
+              elasticsearch.ssl.verificationMode: none
+              server.publicBaseUrl: "http://{{ ansible_host }}:5601"
+              path.data: /elasticsearch/kibana
+              logging:
+                appenders:
+                  file:
+                    type: file
+                    fileName: /elasticsearch/kibana_log/kibana.log
+                    layout:
+                      type: pattern
+                      pattern: "[%date] [%level] [%logger] [%meta] %message"
+                root:
+                  appenders: [default, file]
+              EOF
+
+    - name: Restart Kibana
+      shell: systemctl restart kibana.service
+
+    - name: Installing Logstash
+      shell: apt install -y logstash && systemctl start logstash.service && systemctl enable logstash.service
+
+    - name: Create Log and Data Path for Logstash
+      shell: mkdir -p /elasticsearch/logstash && mkdir -p /elasticsearch/logstash/logs && chown -R logstash:logstash /elasticsearch/logstash && chown -R logstash:logstash /elasticsearch/logstash/logs && chmod -R 775 /elasticsearch/logstash && chmod -R 775 /elasticsearch/logstash/logs
+
+    - name: Change Logstash Config File
+      shell:
+        cmd: |
+              cat > /etc/logstash/logstash.yml << EOF
+              node.name: {{ ansible_hostname }}
+              http.host: {{ ansible_host }}
+              log.level: warn
+              path.logs: /elasticsearch/logstash/logs
+              path.config: /etc/logstash/conf.d/*.conf
+              path.data: /elasticsearch/logstash/
+              xpack.monitoring.enabled: false
+              xpack.monitoring.elasticsearch.username: "elastic"
+              xpack.monitoring.elasticsearch.password: "qweASD123!!!"
+              xpack.monitoring.elasticsearch.hosts: ["http://{{ ansible_hostname }}:9200"]
+              EOF
+
+    - name: Change Logstash Config File
+      shell:
+        cmd: |
+              cat > /etc/logstash/conf.d/default.conf << EOF
+              input {
+                beats {
+                  port => 5044
+                }
+              }
+
+              output {
+                elasticsearch {
+                  hosts => ["{{ ansible_hostname }}:9200"]
+                  index => "%{[@metadata][beat]}_logs_%{+YYYY.MM.dd}"
+                  user => "elastic"
+                  password => 'qweASD123!!!'
+                }
+              }
+              EOF
+    - name: Restart Logstash
+      shell: systemctl restart logstash.service
+
+    - name: Add specified repository into sources list
+      ansible.builtin.apt_repository:
+        repo: deb http://10.115.207.207/ubuntu/mirror/packages.elastic.co/curator/5/debian9 stable main
+        state: present
+    - name: Add apt-repository and install elasticsearch-curator
+      shell: apt install -y elasticsearch-curator
+
+    - name: Create Log and Data Path for Curator
+      shell: mkdir -p /elasticsearch/curator_logs
+
+    - name: Create Directory for Curator yaml
+      shell: mkdir -p /opt/curator
+    - name: Change Curator Config File
+      shell:
+        cmd: |
+          cat > /opt/curator/action.yaml << EOF
+          actions:
+            1:
+              action: delete_indices
+              description: >-
+                . ile baslayanlar haric tum indisleri silen action
+              options:
+                ignore_empty_list: True
+                timeout_override:
+                continue_if_exception: True
+                disable_action: False
+              filters:
+                - filtertype: pattern
+                  kind: regex
+                  value: ^[.]
+                  exclude: True
+                - filtertype: age
+                  source: creation_date
+                  direction: older
+                  #timestring: '%Y.%m.%d'
+                  unit: days
+                  unit_count: 15
+                  exclude:
+            2:
+              action: delete_indices
+              description: >-
+                .monitoring ile baslayan indisleri silen action
+              options:
+                ignore_empty_list: True
+                timeout_override:
+                continue_if_exception: True
+                disable_action: False
+              filters:
+                - filtertype: pattern
+                  kind: prefix
+                  value: .monitoring-
+                  exclude:
+                - filtertype: age
+                  source: creation_date
+                  direction: older
+                  #timestring: '%Y.%m.%d'
+                  unit: days
+                  unit_count: 15
+                  exclude:
+          EOF
+
+    - name: Change Curator Config File
+      shell:
+        cmd: |
+          cat > /opt/curator/curator.yaml << EOF
+          client:
+            hosts:
+              - {{ ansible_host }}
+            port: 9200
+            url_prefix:
+            ssl_no_validate: False
+            username: elastic
+            password: qweASD123!!!
+            timeout: 30
+            master_only: False
+
+          logging:
+            loglevel: INFO
+            logfile:
+            logformat: default
+
+            blacklist: ['elasticsearch', 'urllib3']
+          EOF
+
+    - name: Config Cronjob for Curator
+      cron:
+        name: "curator"
+        minute: "08"
+        hour: "10"
+        job: curator --config /opt/curator/curator.yaml /opt/curator/action.yaml > /elasticsearch/curator_logs/curator_logfile_$(date +'%Y-%m-%d').log
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "elasticsearch"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/elasticsearch_logs/ -name "{{ cluster_name }}-*" -type f -mtime +30 -exec rm -rf {} \;
+
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "logstash"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/logstash/logs/ -name "logstash-*.log" -type f -mtime +30 -exec rm -rf {} \;
+
+    - name: Config Cronjob for Elasticsearch
+      cron:
+        name: "Curator_logs"
+        minute: "08"
+        hour: "10"
+        job: find /elasticsearch/curator_logs/ -name "curator_logfile_*" -type f -mtime +30 -exec rm -rf {} \;
+      
+    - name: Case insensitive password string match
+      expect:
+        command: /usr/share/elasticsearch/bin/elasticsearch-setup-passwords interactive
+        responses:
+          Please confirm that you would like to continue \[y\/N]: 'y'
+          Enter password for \[elastic\]: 'qweASD123!!!'
+          Reenter password for \[elastic\]: 'qweASD123!!!'
+          Enter password for \[apm_system\]: 'qweASD123!!!'
+          Reenter password for \[apm_system\]: 'qweASD123!!!'
+          Enter password for \[kibana\_system\]: 'qweASD123!!!'
+          Reenter password for \[kibana\_system\]: 'qweASD123!!!'
+          Enter password for \[logstash\_system\]: 'qweASD123!!!'
+          Reenter password for \[logstash\_system\]: 'qweASD123!!!'
+          Enter password for \[beats\_system\]: 'qweASD123!!!'
+          Reenter password for \[beats\_system\]: 'qweASD123!!!'
+          Enter password for \[remote\_monitoring\_user\]: 'qweASD123!!!'
+          Reenter password for \[remote\_monitoring\_user\]: 'qweASD123!!!'
+        echo: yes
+        timeout: 60
+

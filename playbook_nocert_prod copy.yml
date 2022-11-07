@@ -1,0 +1,36 @@
+### Elasticsearch Installation
+# Prepare Elasticsearch Installation
+---
+- name: Creating Certificates for Elasticsearch in Master
+  hosts: Production[0]
+  order: sorted
+  serial: 1
+  become: true
+  become_method: sudo
+  vars:
+    hostnames: [" {{master_node1}}", " {{master_node2}}", " {{master_node3}}", " {{slave_node1}}", " {{slave_node2}}", " {{slave_node3}}"]
+    hostips: ["{{master_ip1}}", "{{master_ip2}}", "{{master_ip3}}", "{{slave_ip1}}", "{{slave_ip2}}", "{{slave_ip3}}"]
+  tasks:
+
+        - name: Show zipped data from servers and rules
+          debug:
+            msg: "Server {{ item.0 | trim }} has ip: {{ item.1 | trim }}"
+          loop: "{{ hostnames | zip(hostips) | list }}"
+
+        - name: Creating Certificates for Elasticsearch in Master P01
+          shell: apt update && apt install -y sshpass elasticsearch
+
+        - name: Creating CA Certificate for Elasticsearch in Master P01
+          shell: /usr/share/elasticsearch/bin/elasticsearch-certutil ca --out /etc/elasticsearch/ca --pass elastic_ca
+
+        - name: Signing CA Certificates for all hosts
+          shell: /usr/share/elasticsearch/bin/elasticsearch-certutil cert --ca /etc/elasticsearch/ca --ca-pass elastic_ca --name {{item.0 | trim }} --dns {{ item.0 | trim }}.fw.dteknoloji.com.tr --ip {{ item.1 }} --out /etc/elasticsearch/{{ item.0 | trim }} --pass 'qweASD123!!!'
+          loop: "{{ hostnames | zip(hostips) | list }}"
+
+        - name: Fixing ownership and permissions
+          shell: chown -R elasticsearch:elasticsearch /etc/elasticsearch/* && chmod 640 /etc/elasticsearch/{{ item | trim }}
+          loop: "{{ hostnames | list }}"
+
+        - name: Copying Certificates to other hosts
+          shell: sshpass -p {{ ansible_ssh_pass }} scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -p /etc/elasticsearch/{{ item.0 | trim }} dtuygansible@{{ item.1 | trim }}:/home/dtuygansible/
+          loop: "{{ hostnames | zip(hostips) | list }}"

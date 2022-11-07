@@ -1,0 +1,237 @@
+###Elasticsearch Installation
+#Prepare Elasticsearch Installation
+---
+- name: Installing Elasticsearch to Master
+  hosts: Production[0:2]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+    - name: Installing Elasticsearch
+      shell: apt install -y elasticsearch && systemctl start elasticsearch.service && systemctl enable elasticsearch.service
+    - name: Create Directory for Data and Log Path
+      shell: mkdir -p /elasticsearch/elasticsearch && mkdir -p /elasticsearch/elasticsearch_logs && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch_logs
+    - name: Change Elasticsearch Config File
+      shell:
+        cmd: |
+          cat > /etc/elasticsearch/elasticsearch.yml << EOF
+          cluster.name : {{ cluster_name }}
+          node.name : {{ node_name }}
+          
+          path.data: /elasticsearch/elasticsearch
+          path.logs: /elasticsearch/elasticsearch_logs
+          network.host: {{ ansible_host }}
+          http.port: 9200
+          node.ingest: true
+          node.ml: false
+          node.data: false
+          node.master: true
+          
+          discovery.seed_hosts: [{{ master_node1 }}, {{ master_node2 }}, {{ master_node3 }}]
+          cluster.initial_master_nodes: [{{ master_node1 }}, {{ master_node2 }}, {{ master_node3 }}]
+          
+          xpack.security.enabled: true
+          xpack.security.transport.ssl.enabled: true
+          xpack.security.transport.ssl.verification_mode: "certificate"
+          xpack.security.transport.ssl.keystore.path: /etc/elasticsearch/{{ node_name }}
+          xpack.security.transport.ssl.truststore.path: /etc/elasticsearch/{{ node_name }}
+          EOF
+
+        loop:
+        - {{ master_node1 }} 
+        - {{ master_node2 }} 
+        - {{ master_node3 }} 
+
+- name: Installing Elasticsearch to Slave
+  hosts: Production[3:5]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+        - name: Installing Elasticsearch
+          shell: apt install -y elasticsearch && systemctl start elasticsearch.service && systemctl enable elasticsearch.service
+        - name: Create Directory for Data and Log Path
+          shell: mkdir -p /elasticsearch/elasticsearch && mkdir -p /elasticsearch/elasticsearch_logs && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch && chown -R elasticsearch:elasticsearch /elasticsearch/elasticsearch_logs
+        - name: Change Elasticsearch Config File
+          shell:
+            cmd: |
+              cat > /etc/elasticsearch/elasticsearch.yml << EOF
+              cluster.name : {{ cluster_name }}
+              node.name : {{ node_name }}
+              
+              path.data: /elasticsearch/elasticsearch
+              path.logs: /elasticsearch/elasticsearch_logs
+              network.host: {{ ansible_host }}
+              http.port: 9200
+              node.ingest: true
+              node.ml: false
+              node.data: true
+              node.master: false
+              
+              discovery.seed_hosts: [{{ master_node1 }}, {{ master_node2 }}, {{ master_node3 }}]
+              cluster.initial_master_nodes: [{{ master_node1 }}, {{ master_node2 }}, {{ master_node3 }}]
+              
+              xpack.security.enabled: true
+              xpack.security.transport.ssl.enabled: true
+              xpack.security.transport.ssl.verification_mode: "certificate"
+              xpack.security.transport.ssl.keystore.path: /etc/elasticsearch/{{ item }}
+              xpack.security.transport.ssl.truststore.path: /etc/elasticsearch/{{ item }}
+              EOF
+            
+            loop:
+            - {{ slave_node1 }} 
+            - {{ slave_node2 }} 
+            - {{ slave_node3 }} 
+
+        - name: Process ES Certificates to Kibana Installation Path
+          shell: openssl pkcs12 -in /etc/elasticsearch/{{ guest.hostname }} -cacerts -nokeys -out /etc/kibana/elastic-ca.pem -password pass:qweASD123!!!
+
+        - name: Order Certificates
+          shell: chmod 640 /etc/kibana/elastic-ca.pem
+              #G1EKyJecR#hn2EM7IOGt
+        - name: Copy fw certificate
+          shell: openssl pkcs12 -in /fw.dteknoloji.com.tr.selfsign.pfx -nodes -out /etc/kibana/wildcard_dteknoloji.crt -password pass:G1EKyJecR#hn2EM7IOGt
+        ### Bu YUKARISI BIRAZ MUALLAK TEKRAR BAKILMALI ###
+        - name: Copy fw key
+          shell: openssl pkcs12 -in /home/ansible/fw.dteknoloji.com.tr.selfsign.pfx -nodes -out /etc/kibana/wildcard_dteknoloji.key -password pass:G1EKyJecR#hn2EM7IOGt
+            
+        - name: Change Permissions
+          shell: chmod 640 /etc/kibana/wildcard_dteknoloji.key && chmod 640 /etc/kibana/wildcard_dteknoloji.crt
+            
+        - name: Restart Kibana
+          shell: systemctl restart kibana.service
+
+        - name: Installing Logstash
+          shell: apt install -y logstash && systemctl start logstash.service && systemctl enable logstash.service
+
+        - name: Create Log and Data Path for Logstash
+          shell: mkdir /elasticsearch/logstash && mkdir /elasticsearch/logstash/logs && chown -R logstash:logstash /elasticsearch/logstash && chown -R logstash:logstash /elasticsearch/logstash/logs
+
+        - name: Installing Kibana
+          shell: apt install -y kibana && systemctl start kibana.service && systemctl enable kibana.service
+            
+        - name: Create Log and Data Path for Kibana
+          shell: mkdir -p /elasticsearch/kibana_log && chown -R kibana:kibana /elasticsearch/kibana_log && mkdir -p /elasticsearch/kibana && chown -R kibana:kibana /elasticsearch/kibana
+          
+        - name: Change Kibana Config File
+          shell:
+            cmd: |
+                  cat > /etc/kibana/kibana.yml << EOF
+                  server.host: {{ ansible_host }}
+                  server.name: {{ guest.hostname }}
+                  elasticsearch.hosts: ["https://{{ ansible_host }}:9200"]
+                  kibana.index: ".kibana"
+                  elasticsearch.username: "kibana_system"
+                  elasticsearch.password: "qweASD123!!!"
+                  elasticsearch.ssl.verificationMode: none
+                  server.publicBaseUrl: "https://{{ ansible_host }}:5601"
+                  path.data: /elasticsearch/kibana
+                  logging:
+                    appenders:
+                      file:
+                        type: file
+                        fileName: /elasticsearch/kibana_log/kibana.log
+                        layout:
+                          type: pattern
+                          pattern: "[%date] [%level] [%logger] [%meta] %message"
+                    root:
+                      appenders: [default, file]
+                  elasticsearch.ssl.certificateAuthorities: "/etc/kibana/elastic-ca.pem"
+                  server.ssl.enabled: true
+                  server.ssl.certificate: "/etc/kibana/wildcard_dteknoloji.crt"
+                  server.ssl.key: "/etc/kibana/wildcard_dteknoloji.key"
+                  xpack.security.encryptionKey: "lhWxvvwakvwjleQyxlNr3tZgyUlBnBO7"
+                  console.enabled: true
+                  xpack.security.enabled: true
+                  xpack.security.audit.enabled: false
+                  xpack.monitoring.enabled: true
+                  xpack.monitoring.kibana.collection.enabled: true
+                  xpack.monitoring.kibana.collection.interval: 30000
+                  xpack.monitoring.ui.enabled: true
+                  xpack.monitoring.min_interval_seconds: 30
+                  xpack.apm.enabled: true
+                  xpack.apm.ui.enabled: true
+                  xpack.grokdebugger.enabled: true
+                  xpack.searchprofiler.enabled: true
+                  xpack.graph.enabled: false
+                  xpack.infra.enabled: true
+                  xpack.ml.enabled: false
+                  xpack.reporting.enabled: false
+                  EOF
+
+- name: Creating Certificates for Elasticsearch in Master
+  hosts: Production[0]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+        - name: Creating Certificates for Elasticsearch in Master P01
+          shell: /usr/share/elasticsearch/bin/elasticsearch-certutil ca --out /etc/elasticsearch/ca --pass elastic_ca
+       
+        - name: Register loop output as a variable
+          shell: /usr/share/elasticsearch/bin/elasticsearch-certutil cert --ca /etc/elasticsearch/ca --ca-pass elastic_ca --name {{ item[0] }} --dns {{ item[0] }}.fw.dteknoloji.com.tr --ip {{ item[1] }} --out /etc/elasticsearch/{{ item[0] }} --pass qweASD123!!!
+          loop:
+            - [{{ master_node1 }} , {{ master_ip1 }} ]
+            - [{{ master_node2 }} , {{ master_ip2 }} ]
+            - [{{ master_node3 }} , {{ master_ip3 }} ]
+            - [{{ slave_node1 }} , {{ slave_ip1 }} ]
+            - [{{ slave_node2 }} , {{ slave_ip2 }} ]
+            - [{{ slave_node3 }} , {{ slave_ip3 }} ]
+
+        - name: Register loop output as a variable
+          shell: chown -R elasticsearch:elasticsearch /etc/elasticsearch/* && chmod 640 /etc/elasticsearch/{{ item }}
+          loop:
+            - {{ master_node1 }}
+            - {{ master_node2 }}
+            - {{ master_node3 }} 
+            - {{ slave_node1 }}
+            - {{ slave_node2 }} 
+            - {{ slave_node3 }}
+
+        - name: Register loop output as a variable
+          shell: scp -p /etc/elasticsearch/{{ item[0] }} dtuygansible@{{ item[1] }}:/tmp
+          loop:
+            - [{{ master_node2 }} , {{ master_ip2 }} ]
+            - [{{ master_node3 }} , {{ master_ip3 }} ]
+            - [{{ slave_node1 }} , {{ slave_ip1 }} ]
+            - [{{ slave_node2 }} , {{ slave_ip2 }} ]
+            - [{{ slave_node3 }} , {{ slave_ip3 }} ]
+
+- name: Copy certificates to elasticsearch folder on 1-5
+  hosts: Production[1:5]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+       - name: Register loop output as a variable
+         shell: cp -r /tmp/{{ guest.hostName }} /etc/elasticsearch/ && chmod 640 /etc/elasticsearch/{{ guest.hostName }}
+       - name: Register loop output as a variable
+         shell: /usr/share/elasticsearch/bin/elasticsearch-keystore add xpack.security.transport.ssl.keystore.secure_password && /usr/share/elasticsearch/bin/elasticsearch-keystore add xpack.security.transport.ssl.truststore.secure_password && /usr/share/elasticsearch/bin/elasticsearch-keystore add xpack.security.http.ssl.truststore.secure_password && /usr/share/elasticsearch/bin/elasticsearch-keystore add xpack.security.http.ssl.keystore.secure_password
+       - name: Case insensitive password string match
+         expect:
+           command: /usr/share/elasticsearch/bin/
+           responses:
+                Question:
+                    - Enter value for xpack.security.transport.ssl.keystore.secure_password: qweASD123!!!
+                    - Enter value for xpack.security.transport.ssl.truststore.secure_password: qweASD123!!!
+                    - Enter value for xpack.security.http.ssl.keystore.secure_password: qweASD123!!!
+                    - Enter value for xpack.security.http.ssl.truststore.secure_password: qweASD123!!!
+
+- name: Restart elasticsearch
+  hosts: Production[0:5]
+  order: sorted
+  serial: 1
+  become: yes
+  become_method: sudo
+  tasks:
+        - name: Register loop output as a variable
+          shell: systemctl restart elasticsearch.service
+
+
+
+
+
